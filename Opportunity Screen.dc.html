@@ -1,0 +1,73 @@
+# Install
+
+Your repo already has 4 of the 5 files. **Only two actually need replacing:**
+
+```
+desk.py                ->  replace (yours is 0 bytes — this was the bug)
+templates/index.html   ->  replace
+```
+
+Already correct in your repo, leave alone: `templates/base_desk.html`,
+`static/desk.css`, `app.py`.
+
+Then:
+
+```
+python app.py
+```
+
+and open http://127.0.0.1:5000/
+
+---
+
+## What was wrong
+
+`desk.py` in your repo is an empty file. `app.py` imported it and called
+`desk.render_home()`, which didn't exist, so the template rendered with no data
+and Jinja hit `"{:,}".format(Undefined)` — the TypeError you saw.
+
+Second bug, mine: the safety defaults in `index.html` sat *outside*
+`{% block content %}`, and Jinja ignores anything outside a block in a child
+template. They never ran. Fixed.
+
+## What changed in desk.py
+
+Reading your real `analysis.py` showed my first version was doing it the slow
+way. `analysis._score_as_of(q)` already scores and ranks the whole universe and
+caches it in the same `_SCORE_CACHE` that `/refresh` clears — the work
+`/analyze` already does. So `desk.py` now:
+
+- reads that cached DataFrame instead of re-scoring anything
+- filters it in plain Python (~4,500 rows, instant)
+- calls `run_analysis()` for only the ~40 rows the ledger displays, to pick up
+  the signal rationales in template shape
+
+Net effect: the landing page adds roughly one extra quarter of scoring (the
+prior quarter, for the q/q deltas) and nothing more. Filter changes are free.
+
+Reps and asset sizes come from `get_available_options()`, which already attaches
+`rep` and `assets_raw` per bank — no second source of truth.
+
+## If the data folder can't be read
+
+The page now says so in a red strip and links to Data QC, rather than rendering
+an empty screen with no explanation.
+
+## Not touched
+
+`/analyze`, `/pdf`, `/settings`, `/validate`, `results.html`, `settings.html`,
+`validate.html`, `base.html`, `static/style.css`, `analysis.py`, `signals.py`,
+`config.py`, `reps.py`. `desk.css` is scoped under `.desk` and can't collide
+with `style.css`.
+
+## One dependency worth knowing
+
+`desk.py` calls two private helpers — `analysis._score_as_of()` and
+`analysis._keys_for_df()`. If either is ever renamed, rename it in `desk.py`
+too. The public `run_analysis()` can't do this job: it only returns rows for a
+bank list you already have, and this page's whole premise is not having one yet.
+
+## Cleanup
+
+Delete `support.js` and `COPILOT_PROMPT.md` from the repo — leftovers from the
+earlier handoff, unused by the app.
