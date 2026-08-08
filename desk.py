@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}SSS Bank Analysis{% endblock %} · SouthState Securities</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='desk.css') }}">
+  <style>
+    html, body { margin:0; padding:0; background:#0A1420; }
+    body.theme-light { background:#EFF2F7; }
+  </style>
+</head>
+
+<body>
+  <div class="desk" id="desk">
+
+    <aside class="desk-rail">
+      <div class="desk-rail-head">
+        <img src="{{ url_for('static', filename='southstate_logo.png') }}" alt="SouthState Securities">
+        <div class="desk-rail-sub">Bank Portfolio Screen</div>
+      </div>
+
+      <nav class="desk-nav">
+        <div class="desk-nav-label">WORKSPACE</div>
+        <a href="{{ url_for('home') }}" class="{{ 'on' if active_nav == 'home' }}"><span class="n">01</span> Bank
+          Universe</a>
+        <a href="{{ url_for('validate') }}" class="{{ 'on' if active_nav == 'validate' }}"><span class="n">02</span>
+          Data QC</a>
+        <a href="{{ url_for('settings') }}" class="{{ 'on' if active_nav == 'settings' }}"><span class="n">03</span>
+          Settings</a>
+      </nav>
+
+      {% set universe_total = universe_total | default(0, true) %}
+      {% set quarters = quarters | default([], true) %}
+      {% set cache = cache | default({'workbooks_cached': 0}, true) %}
+      {% set rep_status = rep_status | default({'ok': false}, true) %}
+      <div class="desk-rail-foot">
+        <div class="desk-stat"><span>UNIVERSE</span><span>{{ "{:,}".format(universe_total) }}</span></div>
+        <div class="desk-stat"><span>QUARTERS</span><span>{{ quarters|length }}</span></div>
+        <div class="desk-stat"><span>REPS</span><span>{{ rep_status.get('rep_count', '—') if rep_status else '—' }}</span></div>
+        <div class="desk-rail-live">
+          <span class="desk-dot"></span>
+          {% set wb = cache.get('workbooks_cached', 0) if cache is mapping else 0 %}
+          <span>SNL cache · {{ wb }} workbook{{ '' if wb == 1 else 's' }}</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="desk-main">
+      {% with messages = get_flashed_messages() %}{% if messages %}
+      <div class="desk-status" style="color:var(--gold);">{% for m in messages %}<span>{{ m }}</span>{% endfor %}</div>
+      {% endif %}{% endwith %}
+      {% block content %}{% endblock %}
+    </div>
+
+  </div>
+
+  <script>
+    // Theme toggle — persisted so the desk keeps the analyst's choice across requests.
+    (function () {
+      var KEY = 'sss.desk.theme';
+      var root = document.getElementById('desk');
+      function apply(t) {
+        root.classList.toggle('theme-light', t === 'light');
+        document.body.classList.toggle('theme-light', t === 'light');
+        document.querySelectorAll('[data-theme-btn]').forEach(function (b) {
+          b.classList.toggle('on', b.getAttribute('data-theme-btn') === t);
+        });
+      }
+      apply(localStorage.getItem(KEY) || 'dark');
+      document.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-theme-btn]');
+        if (!b) return;
+        var t = b.getAttribute('data-theme-btn');
+        localStorage.setItem(KEY, t);
+        apply(t);
+      });
+    })();
+  </script>
+</body>
+
+</html>
