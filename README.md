@@ -1,331 +1,196 @@
-"""SSS Bank Analysis - Flask front-end."""
+# SSS Bank Analysis — SouthState Securities
 
-import io
-from flask import (
-    Flask,
-    render_template,
-    request,
-    redirect,
-    url_for,
-    flash,
-    send_file,
-    abort,
-)
-import config, analysis, reps, desk
+Bond-portfolio opportunity screen for community banks with a branded,
+compliance-aware PDF hand-off. Reads SNL/Capital IQ quarterly workbooks in-place
+from the shared drive; scores every bank on Signals A/B/C as universe percentiles.
 
-app = Flask(__name__)
-app.secret_key = "change-me-to-a-random-string"
+## AI providers (alternatives to the Claude API)
+The narrative engine is PLUGGABLE. Set LLM_PROVIDER in .env:
+  anthropic - Anthropic Claude API
+  azure     - Azure OpenAI in YOUR tenant (compliant, Microsoft; bank-friendly)
+  openai    - ANY OpenAI-compatible endpoint (corporate gateway, proxy, etc.)
+  ollama    - a LOCAL model on this machine (no internet; cannot be blocked)
+  auto      - try each configured provider until one works
+  off       - always use the built-in narrative
+Fill the matching keys/URLs in .env (see .env.example). The app always falls
+back to a built-in narrative if a provider is unreachable, so a PDF is always
+produced. Diagnose the live chain at /ai-test.
 
+Even OFFLINE, the built-in engine now writes DIFFERENT Conversational vs.
+Analyst voices - so the two-voice feature works with no external API at all.
 
-@app.context_processor
-def _template_helpers():
-    """Lets templates check whether a route exists before linking to it."""
-    return {"has_endpoint": lambda name: name in app.view_functions}
+## Setup
+1. pip install -r requirements.txt
+2. Copy .env.example to .env; set LLM_PROVIDER and the relevant keys.
+3. python app.py  ->  http://127.0.0.1:5000
 
+## Notable
+- Same-named banks disambiguated by city/state + unique SNL key.
+- In-app Settings: materiality bar, voice, trend table, weights, PDF fields,
+  and a prompt manager (locked JSON contract, named custom prompts, revert).
+- In-memory caching of workbooks; "Refresh data" button re-reads the share.
+- PDF sections never split across page breaks.
 
-def _provider_summary():
-    prov = config.LLM_PROVIDER
-    ready = {
-        p: config.provider_available(p)
-        for p in ("anthropic", "azure", "openai", "ollama")
-    }
-    active_ok = (
-        (prov == "auto" and any(ready.values()))
-        or config.provider_available(prov)
-        or prov == "ollama"
-    )
-    label = "Built-in only" if prov == "off" else (prov if prov != "auto" else "auto")
-    return {"provider": prov, "label": label, "ready": ready, "active_ok": active_ok}
+# Handoff: Bank Universe (landing page redesign)
 
+## Overview
 
-@app.route("/", methods=["GET"])
-def home():
-    """Bank Universe — the screen already run. See desk.py."""
-    return desk.render_home()
+Replaces the landing page of the Bond-Portfolio Opportunity Screen. The old
+`index.html` was a setup form — pick banks, pick quarters, run analysis. That
+puts a configuration step in front of a strategy desk that arrives wanting to
+know where opportunity moved this quarter across the whole universe.
 
+The new page lands on the screen **already run**: the full universe scored for
+the newest detected quarter, ranked by composite, with a band showing what
+changed since last quarter. Bank/quarter selection survives as an on-demand
+"Custom screen" drawer that still POSTs to `/analyze` unchanged.
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    selected_banks = request.form.getlist("banks")
-    selected_quarters = request.form.getlist("quarters")
-    rep_filter = request.form.get("rep_filter", "__all__")
-    if not selected_banks or not selected_quarters:
-        flash("Please select at least one bank and one quarter.")
-        return redirect(url_for("home"))
-    results = analysis.run_analysis(
-        banks=selected_banks, quarters=selected_quarters, rep_filter=rep_filter
-    )
-    as_of = sorted(selected_quarters, key=lambda q: int(q[:4]) * 10 + int(q[-1]))[-1]
-    rep_label = next(
-        (o["label"] for o in reps.rep_options() if o["value"] == rep_filter), "All reps"
-    )
-    return render_template(
-        "results.html",
-        results=results,
-        banks=selected_banks,
-        quarters=selected_quarters,
-        as_of=as_of,
-        rep_filter=rep_filter,
-        rep_label=rep_label,
-    )
+## About the design files
 
+The files in this bundle are **design references created in HTML** — they show
+intended look and behavior. `templates/` and `static/desk.css` are shaped for
+this Flask/Jinja app and can be adopted close to as-is. `app_desk.py` cannot: it
+names functions that may not exist under those names in `app.py`, and marks three
+integration seams (`# >>> WIRE:`) that must be bound to the scoring code the
+`/analyze` path already uses.
 
-@app.route("/pdf")
-def pdf():
-    bank = request.args.get("bank", "").strip()
-    as_of = request.args.get("as_of", "").strip()
-    if not bank or not as_of:
-        abort(400, "bank and as_of are required")
-    facts = analysis.get_bank_facts(bank, as_of)
-    if facts is None:
-        abort(404, f"No data for {bank} in {as_of}")
-    import insight, pdf_report
+`Opportunity Screen.dc.html` is the interactive prototype. Open it in a browser
+for spacing, both themes, and interaction behavior. It is not production code.
 
-    narrative = insight.generate_insight(facts)
-    trend = None
-    if getattr(config, "PDF_INCLUDE_TREND", False):
-        trend = analysis.get_bank_trend(
-            bank, as_of, n=getattr(config, "PDF_TREND_QUARTERS", 5)
-        )
-    pdf_bytes = pdf_report.build_pdf(
-        facts, narrative, trend=trend, show_rep=getattr(config, "PDF_SHOW_REP", True)
-    )
-    safe = "".join(c if c.isalnum() else "_" for c in facts["bank"])[:40]
-    return send_file(
-        io.BytesIO(pdf_bytes),
-        mimetype="application/pdf",
-        as_attachment=True,
-        download_name=f"CallPrep_{safe}_{as_of}.pdf",
-    )
+## Fidelity
 
+**High-fidelity.** Colors, typography, spacing, and interaction states are final.
+Recreate them exactly. Every token in the design already exists in `desk.css`.
 
-@app.route("/ai-test")
-def ai_test():
-    import insight
+## Screens / views
 
-    tiny = {
-        "bank": "Test Bank",
-        "as_of": "2026Q1",
-        "prior": "2025Q4",
-        "universe_rank": 1,
-        "universe_total": 1,
-        "has_material_opportunity": True,
-        "materiality_threshold": 70,
-        "scores": {"A": 80, "B": 80, "C": 50, "composite": 70},
-        "signal_facts": {
-            "A": {
-                "cash_est_$000": 1000,
-                "cash_pct_assets": 10,
-                "loans_deposits_pct": 60,
-                "liquidity_pct": 20,
-                "yield_earning_assets_pct": 3.5,
-            },
-            "B": {
-                "fv_over_cost_pct": 92,
-                "underwater_pct_of_cost": 8,
-                "est_unrealized_loss_$000": 500,
-                "securities_yield_pct": 2.5,
-            },
-            "C": {
-                "net_income_now_$000": 100,
-                "net_income_prior_$000": 110,
-                "net_income_change_$000": -10,
-            },
-        },
-        "balance_sheet": {
-            "total_assets_$000": 10000,
-            "total_loans_$000": 6000,
-            "total_deposits_$000": 8000,
-            "total_securities_amort_cost_$000": 2000,
-            "equity_over_assets_pct": 10,
-            "leverage_ratio_pct": 11,
-        },
-        "margin_funding": {
-            "nim_pct": 3.2,
-            "cost_of_funds_pct": 1.3,
-            "yield_on_loans_pct": 6.0,
-            "noninterest_bearing_dep_pct": 15,
-            "brokered_dep_pct": 2,
-        },
-        "securities_detail": {"pledged_pct_of_secs": 60},
-        "credit": {"npas_over_assets_pct": 0.1},
-    }
-    results = {}
-    for name in ("anthropic", "azure", "openai", "ollama"):
-        if not config.provider_available(name) and name != "ollama":
-            results[name] = "not configured"
-            continue
-        try:
-            data, model = insight._PROVIDERS[name](tiny, "conversational")
-            results[name] = f"OK ({model}) - {str(data.get('headline',''))[:60]}"
-        except Exception as e:
-            results[name] = f"FAILED: {type(e).__name__}: {str(e)[:160]}"
-    return {"LLM_PROVIDER": config.LLM_PROVIDER, "results": results}
+### Bank Universe — `/`
 
+**Purpose:** the desk's arrival view. Answer "what moved and who should we call"
+before any interaction.
 
-@app.route("/refresh", methods=["POST"])
-def refresh():
-    flash(analysis.refresh_cache())
-    desk.invalidate()
-    return redirect(request.referrer or url_for("home"))
+**Layout:** two-column CSS grid, `212px minmax(0,1fr)`. Left rail is
+`position:sticky; top:0; height:100vh`. Right column is a vertical stack:
 
+1. **Header** — `padding:16px 22px 13px`, `border-bottom:1px solid var(--line)`,
+   `background:var(--panel)`. `h1` "Bank Universe" at 19px/600/-0.01em. Below it a
+   fact row: QUARTER LOADED / UNIVERSE SCREENED / Q/Q BASIS / ABOVE THRESHOLD,
+   each a 9.5px 0.13em-tracked uppercase key over a 15px mono value, separated by
+   1px × 26px vertical rules. Right side: Dark/Light toggle, Export CSV, and the
+   gold "Custom screen" button.
 
-@app.route("/settings", methods=["GET"])
-def settings():
-    import insight, fields
+2. **Status strip** — 7px/22px, `background:var(--panel2)`, 10.5px `var(--faint)`.
+   Data dir (mono), workbook/quarter counts, rep-file status, a green freshness
+   dot; right-aligned Refresh and "Run data QC →" (gold, underlined).
 
-    s = config.load_settings()
-    prompt_data = {}
-    for v in ("conversational", "analyst"):
-        prompt_data[v] = {
-            "default": insight.get_default_body(v),
-            "custom": dict(s["PROMPT_LIBRARY"].get(v, {})),
-            "active": s["ACTIVE_PROMPT"].get(v, "Default"),
-        }
-    return render_template(
-        "settings.html",
-        s=s,
-        saved=request.args.get("saved"),
-        groups=fields.GROUPS,
-        catalog=fields.FIELDS,
-        snapshot_sel=set(s["SNAPSHOT_FIELDS"]),
-        trend_sel=set(s["TREND_FIELDS"]),
-        trend_max=fields.TREND_MAX,
-        prompt_data=prompt_data,
-        provider=_provider_summary(),
-        rep_status=reps.status(),
-    )
+3. **Custom screen drawer** — hidden by default. Two columns
+   (`minmax(0,1fr) 300px`): scrollable bank cohort checklist with its own search
+   and live selected-count, and a 3-up grid of quarter chips (checked chips take
+   the amber border and `#17222B` fill). Submits to `/analyze`.
 
+4. **What-changed band** — grid `minmax(0,1fr) 1px minmax(0,340px)`, collapsing to
+   one column under 1100px.
+   - *Moved this quarter*: `repeat(auto-fit,minmax(154px,1fr))` cards. Each card:
+     bank name 11.5px/500 truncated, delta at 19px mono/600 (amber-red `#E2653F`
+     up, `#5A7186` down), `prev→now` pair at 10.5px mono, driver clause at 10px.
+     **The auto-fit minimum matters** — a fixed 5-column track crushed the cards
+     below their content width and overflowed the borders at desk widths.
+   - *New to the top decile*: rows with a 3px × 20px `#E2653F` tick, bank name,
+     rep line, and `prevRank → rank` in mono.
 
-@app.route("/settings", methods=["POST"])
-def settings_save():
-    f = request.form
-    try:
-        mat = int(f.get("materiality", 70))
-    except ValueError:
-        mat = 70
-    mat = max(0, min(100, mat))
-    tone = f.get("tone", "conversational")
-    if tone not in ("conversational", "analyst"):
-        tone = "conversational"
-    include_trend = f.get("include_trend") == "on"
-    show_rep = f.get("show_rep") == "on"
-    try:
-        tq = int(f.get("trend_quarters", 5))
-    except ValueError:
-        tq = 5
-    tq = max(2, min(12, tq))
-    reward_decline = f.get("signal_c_direction", "decline") == "decline"
+5. **Refine toolbar** — 10px/22px, hairline bottom. REFINE label, 246px text
+   input, rep select, band select, conditional gold "clear", right-aligned count
+   in mono.
 
-    def _w(n, d):
-        try:
-            return max(0.0, float(f.get(n, d)))
-        except ValueError:
-            return d
+6. **Ledger** — grid `88px minmax(150px,1fr) 96px 84px 84px 84px 74px 78px`,
+   `min-width:800px` inside an `overflow-x:auto` wrapper. Header row 30px on
+   `var(--panel2)` with 9.5px/0.12em keys. Body rows 46px, `border-bottom:1px
+   solid var(--line2)`, hover `var(--hover)`, and a 2px left border in amber when
+   the composite clears the threshold. Rank cell carries a 64px × 5px position
+   track. Signal cells pair a 19px-wide mono percentile with a 46px × 4px bar in
+   the heat color. Δ Q/Q and COMPOSITE are right-aligned; composite is 15px/600.
 
-    wa, wb, wc = _w("weight_a", 1), _w("weight_b", 1), _w("weight_c", 1)
-    if wa + wb + wc == 0:
-        wa = wb = wc = 1
-    import fields
+## Interactions & behavior
 
-    snapshot = fields.sanitize(f.getlist("snapshot_fields"), fields.DEFAULT_SNAPSHOT)
-    trend = fields.sanitize(f.getlist("trend_fields"), fields.DEFAULT_TREND)[
-        : fields.TREND_MAX
-    ]
-    config.save_settings(
-        {
-            "MATERIALITY_PERCENTILE": mat,
-            "NARRATIVE_TONE": tone,
-            "PDF_INCLUDE_TREND": include_trend,
-            "PDF_TREND_QUARTERS": tq,
-            "SIGNAL_C_REWARD_DECLINE": reward_decline,
-            "SIGNAL_WEIGHTS": {"A": wa, "B": wb, "C": wc},
-            "SNAPSHOT_FIELDS": snapshot,
-            "TREND_FIELDS": trend,
-            "PDF_SHOW_REP": show_rep,
-        }
-    )
-    analysis.refresh_cache()
-    desk.invalidate()
-    flash("Settings saved. They apply immediately \u2014 no restart needed.")
-    return redirect(url_for("settings", saved=1))
+- Rep and band selects submit the GET form on change. The text input submits
+  420ms after the last keystroke.
+- Dropdowns are co-filtered: each one's counts reflect the other's selection, so
+  no combination returns zero.
+- Ledger rows, mover cards, and entrant rows are `<a>` elements opening the PDF
+  hand-off in a new tab.
+- Custom screen button toggles the drawer, flips to an outline style, and swaps
+  its label to "Custom screen ✕". `aria-expanded` / `aria-controls` are set.
+- Theme toggle writes `sss.desk.theme` to localStorage and applies `.theme-light`
+  on the `.desk` root and `<body>`.
+- Empty states: no prior quarter → movers band shows an empty line; no filter
+  matches → ledger shows a clear-filters message; rep file missing → status strip
+  reports it.
 
+## State
 
-@app.route("/settings/reset", methods=["POST"])
-def settings_reset():
-    config.save_settings(dict(config.SETTINGS_DEFAULTS))
-    analysis.refresh_cache()
-    desk.invalidate()
-    flash("Settings reset to defaults.")
-    return redirect(url_for("settings"))
+Server-rendered; all filter state lives in query params on `/` (`q`,
+`rep_filter`, `band`). Client state is only the drawer's open/closed flag and the
+theme preference.
 
+Data fetching: `screen_universe(as_of, settings)` scores the full universe for the
+current and prior quarters, memoized on `(as_of, settings_fingerprint)`. It must
+be invalidated wherever `/refresh` clears the workbook cache.
 
-@app.route("/settings/prompt", methods=["POST"])
-def settings_prompt():
-    f = request.form
-    action = f.get("action", "")
-    voice = f.get("voice", "conversational")
-    if voice not in ("conversational", "analyst"):
-        voice = "conversational"
-    s = config.load_settings()
-    lib = s["PROMPT_LIBRARY"]
-    active = s["ACTIVE_PROMPT"]
-    name = (f.get("name") or "").strip()
-    new_name = (f.get("new_name") or "").strip()
-    body = (f.get("body") or "").strip()
-    if action == "activate":
-        active[voice] = name if (name == "Default" or name in lib[voice]) else "Default"
-        flash(f"Active {voice} prompt set to \u201c{active[voice]}\u201d.")
-    elif action == "save_new":
-        if not new_name:
-            flash("Please enter a name for the new prompt.")
-        elif new_name == "Default":
-            flash("\u2018Default\u2019 is reserved.")
-        elif not body:
-            flash("The prompt text is empty.")
-        else:
-            lib[voice][new_name] = body
-            active[voice] = new_name
-            flash(f"Saved and activated \u201c{new_name}\u201d.")
-    elif action == "update":
-        if name == "Default" or name not in lib[voice]:
-            flash("Pick a saved custom prompt to update.")
-        elif not body:
-            flash("The prompt text is empty.")
-        else:
-            lib[voice][name] = body
-            active[voice] = name
-            flash(f"Updated \u201c{name}\u201d.")
-    elif action == "delete":
-        if name in lib[voice]:
-            del lib[voice][name]
-            if active[voice] == name:
-                active[voice] = "Default"
-            flash(f"Deleted \u201c{name}\u201d.")
-        else:
-            flash("Nothing to delete.")
-    elif action == "revert":
-        active[voice] = "Default"
-        flash(f"{voice.capitalize()} prompt reverted to Default.")
-    config.save_settings({"PROMPT_LIBRARY": lib, "ACTIVE_PROMPT": active})
-    return redirect(url_for("settings"))
+## Design tokens
 
+Dark (default) → light:
 
-@app.route("/validate")
-def validate():
-    return render_template("validate.html", reports=analysis.validate_all())
+| token | dark | light |
+| --- | --- | --- |
+| `--bg` | `#0A1420` | `#EFF2F7` |
+| `--panel` | `#0B1826` | `#FFFFFF` |
+| `--panel2` | `#0C1A2A` | `#F6F8FC` |
+| `--line` | `#1B2C42` | `#D9E0EA` |
+| `--line2` | `#14263A` | `#E9EEF4` |
+| `--border` | `#24384F` | `#CBD5E2` |
+| `--borderHi` | `#3A5470` | `#9AAABF` |
+| `--text` | `#E9EEF6` | `#0B2545` |
+| `--text2` | `#B7C7DA` | `#3B5375` |
+| `--muted` | `#7E93AE` | `#5C7189` |
+| `--dim` | `#5D7391` | `#6B7F99` |
+| `--faint` | `#4E637F` | `#8DA0B6` |
+| `--hover` | `#101F31` | `#F3F6FB` |
+| `--track` | `#1D3149` | `#DCE4EE` |
+| `--gold` | `#C9A227` | `#9A7412` |
+| `--rail` | `#0B1826` | `#002F6C` |
+| `--railSel` | `#14283E` | `#0B4192` |
 
+Fixed across themes: amber action `#E9A93C`; percentile heat ramp `#E2653F` (80+),
+`#C08243` (60–79), `#7E8B9C` (40–59), `#5A7186` (20–39), `#3F6584` (0–19); status
+green `#4E9A6A`.
 
-@app.route("/health")
-def health():
-    return {
-        "status": "ok",
-        "ai": _provider_summary(),
-        "cache": analysis.cache_status(),
-        "reps": reps.status(),
-        "data_dir": config.DATA_DIR,
-    }
+Type: IBM Plex Sans for UI, IBM Plex Mono for every numeral, always with
+`font-variant-numeric: tabular-nums`. Scale in use: 19 / 15 / 13.5 / 13 / 12.5 /
+11.5 / 11 / 10.5 / 10 / 9.5px. **Nothing below 9.5px.** Section labels are 9.5px,
+600 weight, 0.12–0.16em tracking, uppercase.
 
+Geometry: no border radius anywhere — every edge is square. Borders are 1px
+hairlines. No shadows except the PDF preview card.
 
-if __name__ == "__main__":
-    app.run(debug=True)
+## Assets
+
+- `static/southstate_logo.png` — existing, reused in the rail at 152px wide
+- IBM Plex Sans + Mono via Google Fonts (linked in `base_desk.html`)
+
+No new imagery.
+
+## Files
+
+| file | role |
+| --- | --- |
+| `templates/base_desk.html` | chrome-free base: left rail, theme toggle. **Do not merge into `base.html`** — the other pages keep the topbar. |
+| `templates/index.html` | the landing template |
+| `static/desk.css` | all styles, scoped under `.desk` |
+| `app_desk.py` | reference view logic; three `# >>> WIRE:` seams |
+| `COPILOT_PROMPT.md` | the brief to hand Copilot |
+| `Opportunity Screen.dc.html` | interactive prototype — open in a browser |
+
+## Not in scope
+
+`results.html`, `settings.html`, `validate.html`, the `/analyze` POST contract,
+PDF generation, and `static/style.css` are all untouched.

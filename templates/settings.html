@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-head"><h2>Settings</h2><div class="sub">Tune scoring, the PDF, and the AI provider. Changes apply immediately — no restart.</div></div>
+
+<section class="card"><h2>AI provider</h2>
+  <p class="muted" style="margin-top:2px;">Which engine writes the PDF narrative. Set <code>LLM_PROVIDER</code> in <code>.env</code>. Falls back to the built-in narrative if unreachable.</p>
+  <div class="prov-grid">
+    <div class="prov-row"><span class="prov-name">Active setting</span><span class="pill {{ 'ok' if provider.active_ok else 'warn' }}">{{ provider.label }}</span></div>
+    {% for p, ok in provider.ready.items() %}<div class="prov-row"><span class="prov-name">{{ p }}</span>{% if ok %}<span class="pill ok">configured</span>{% else %}<span class="pill">not configured</span>{% endif %}</div>{% endfor %}
+  </div>
+  <p class="muted set-hint">Test the live chain at <a href="{{ url_for('ai_test') }}" target="_blank">/ai-test</a>. Rep file: {% if rep_status.ok %}loaded ({{ rep_status.bank_count }} banks, {{ rep_status.rep_count }} reps).{% else %}<strong>{{ rep_status.note }}</strong>.{% endif %}</p>
+</section>
+
+<form action="{{ url_for('settings_save') }}" method="post">
+  <section class="card"><h2>Opportunity threshold</h2>
+    <div class="set-row"><input type="range" id="materiality" name="materiality" min="0" max="100" step="5" value="{{ s.MATERIALITY_PERCENTILE }}" oninput="matOut.value=this.value"><output id="matOut" class="set-val">{{ s.MATERIALITY_PERCENTILE }}</output><span class="muted">th percentile</span></div>
+    <p class="muted set-hint">At/above = material opportunity; below = relationship call.</p>
+  </section>
+  <section class="card"><h2>PDF narrative voice</h2>
+    <div class="set-choices">
+      <label class="choice {{ 'sel' if s.NARRATIVE_TONE=='conversational' else '' }}"><input type="radio" name="tone" value="conversational" {{ 'checked' if s.NARRATIVE_TONE=='conversational' }}><span class="choice-t">Conversational</span><span class="choice-d">Natural, plain-spoken. (Recommended)</span></label>
+      <label class="choice {{ 'sel' if s.NARRATIVE_TONE=='analyst' else '' }}"><input type="radio" name="tone" value="analyst" {{ 'checked' if s.NARRATIVE_TONE=='analyst' }}><span class="choice-t">Analyst</span><span class="choice-d">Tighter, more technical desk voice.</span></label>
+    </div>
+  </section>
+  <section class="card"><h2>PDF options</h2>
+    <div class="set-row"><label class="switch"><input type="checkbox" name="include_trend" {{ 'checked' if s.PDF_INCLUDE_TREND }}><span class="slider-sw"></span></label><span>Include a multi-quarter trend table</span></div>
+    <div class="set-row" style="margin-top:10px;"><span class="muted">Quarters of history:</span><input type="number" name="trend_quarters" min="2" max="12" value="{{ s.PDF_TREND_QUARTERS }}" class="num-in"></div>
+    <div class="set-row" style="margin-top:10px;"><label class="switch"><input type="checkbox" name="show_rep" {{ 'checked' if s.PDF_SHOW_REP }}><span class="slider-sw"></span></label><span>Show assigned rep on the PDF (“Prepared for: …”)</span></div>
+  </section>
+  <section class="card"><h2>Signal behavior (advanced)</h2>
+    <h3 style="margin-top:6px;">Signal C — earnings direction</h3>
+    <div class="set-choices">
+      <label class="choice {{ 'sel' if s.SIGNAL_C_REWARD_DECLINE else '' }}"><input type="radio" name="signal_c_direction" value="decline" {{ 'checked' if s.SIGNAL_C_REWARD_DECLINE }}><span class="choice-t">Reward a q/q decline</span><span class="choice-d">Falling net income = more receptive. (Default)</span></label>
+      <label class="choice {{ 'sel' if not s.SIGNAL_C_REWARD_DECLINE else '' }}"><input type="radio" name="signal_c_direction" value="improve" {{ 'checked' if not s.SIGNAL_C_REWARD_DECLINE }}><span class="choice-t">Reward improvement</span><span class="choice-d">Rising net income scores higher.</span></label>
+    </div>
+    <h3 style="margin-top:16px;">Composite weighting</h3>
+    <div class="weights">
+      <div class="wt"><label>A · liquidity</label><input type="number" name="weight_a" min="0" step="any" value="{{ '%.2f'|format(s.SIGNAL_WEIGHTS.A) }}" class="num-in"></div>
+      <div class="wt"><label>B · bond book</label><input type="number" name="weight_b" min="0" step="any" value="{{ '%.2f'|format(s.SIGNAL_WEIGHTS.B) }}" class="num-in"></div>
+      <div class="wt"><label>C · net income</label><input type="number" name="weight_c" min="0" step="any" value="{{ '%.2f'|format(s.SIGNAL_WEIGHTS.C) }}" class="num-in"></div>
+    </div>
+  </section>
+  <section class="card"><h2>PDF table fields</h2>
+    <p class="muted" style="margin-top:2px;">Which metrics appear in the two PDF tables. Trend capped at {{ trend_max }}.</p>
+    <div class="grid" style="margin-top:8px;">
+      <div><h3>Snapshot — “Verified figures”</h3><input type="text" class="filter" onkeyup="filterList(this,'snapfields')" placeholder="Filter…">
+        <div id="snapfields" class="scrollbox" style="max-height:240px;">{% for gname, ids in groups %}<div class="fgroup">{{ gname }}</div>{% for fid in ids %}<label class="chk"><input type="checkbox" name="snapshot_fields" value="{{ fid }}" {{ 'checked' if fid in snapshot_sel }}> {{ catalog[fid].label }}</label>{% endfor %}{% endfor %}</div></div>
+      <div><h3>Trend — “How it’s trending”</h3><input type="text" class="filter" onkeyup="filterList(this,'trendfields')" placeholder="Filter…">
+        <div id="trendfields" class="scrollbox" style="max-height:240px;">{% for gname, ids in groups %}<div class="fgroup">{{ gname }}</div>{% for fid in ids %}<label class="chk"><input type="checkbox" name="trend_fields" value="{{ fid }}" {{ 'checked' if fid in trend_sel }}> {{ catalog[fid].label }}</label>{% endfor %}{% endfor %}</div></div>
+    </div>
+  </section>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <button type="submit" class="btn primary">Save settings</button>
+    <button type="submit" class="btn" formaction="{{ url_for('settings_reset') }}">Reset to defaults</button>
+    {% if saved %}<span class="pill ok">Saved ✓</span>{% endif %}
+  </div>
+</form>
+
+<div class="page-head" style="margin-top:26px;"><h2>Claude / model prompts</h2><div class="sub">Edit the instructions per voice. “Default” is built in and always available to revert to. The JSON output format is locked.</div></div>
+{% for voice in ['conversational','analyst'] %}
+{% set pdta = prompt_data[voice] %}
+<section class="card"><h2>{{ 'Conversational' if voice=='conversational' else 'Analyst' }} voice <span class="muted" style="font-weight:400;font-size:12px;">— active: <strong>{{ pdta.active }}</strong></span></h2>
+  <form action="{{ url_for('settings_prompt') }}" method="post" id="pf_{{ voice }}">
+    <input type="hidden" name="voice" value="{{ voice }}"><input type="hidden" name="action" id="act_{{ voice }}" value="">
+    <div class="set-row" style="flex-wrap:wrap;"><label class="muted">Prompt:</label>
+      <select name="name" id="sel_{{ voice }}" class="prompt-sel" onchange="loadPrompt('{{ voice }}')">
+        <option value="Default" {{ 'selected' if pdta.active=='Default' }}>Default (built-in)</option>
+        {% for cname in pdta.custom.keys() %}<option value="{{ cname }}" {{ 'selected' if pdta.active==cname }}>{{ cname }}</option>{% endfor %}</select>
+      <button type="button" class="btn btn-sm" onclick="submitPrompt('{{ voice }}','activate')">Use this</button>
+      <button type="button" class="btn btn-sm" onclick="submitPrompt('{{ voice }}','revert')">Revert to Default</button>
+    </div>
+    <textarea name="body" id="body_{{ voice }}" class="prompt-box" spellcheck="false"></textarea>
+    <div class="set-row" style="flex-wrap:wrap;">
+      <button type="button" class="btn btn-sm" onclick="submitPrompt('{{ voice }}','update')">Update selected</button>
+      <button type="button" class="btn btn-sm warn-btn" onclick="submitPrompt('{{ voice }}','delete')">Delete selected</button>
+      <span style="width:14px;"></span>
+      <input type="text" name="new_name" class="num-in" style="width:180px;" placeholder="New prompt name">
+      <button type="button" class="btn btn-sm gold" onclick="submitPrompt('{{ voice }}','save_new')">Save as new</button>
+    </div>
+  </form>
+</section>
+{% endfor %}
+<script>
+const PROMPTS = {{ prompt_data|tojson }};
+function bodyFor(v,n){ if(n==='Default') return PROMPTS[v].default; return (PROMPTS[v].custom||{})[n]||PROMPTS[v].default; }
+function loadPrompt(v){ document.getElementById('body_'+v).value=bodyFor(v,document.getElementById('sel_'+v).value); }
+function submitPrompt(v,a){ document.getElementById('act_'+v).value=a; document.getElementById('pf_'+v).submit(); }
+function filterList(input,listId){var f=input.value.toLowerCase();var l=document.getElementById(listId).getElementsByClassName('chk');for(var i=0;i<l.length;i++){var t=l[i].textContent.toLowerCase();l[i].style.display=t.indexOf(f)>-1?'':'none';}}
+['conversational','analyst'].forEach(function(v){var s=document.getElementById('sel_'+v);if(s){document.getElementById('body_'+v).value=bodyFor(v,s.value);}});
+</script>
+{% endblock %}
