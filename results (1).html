@@ -1,0 +1,135 @@
+{% extends "base_desk.html" %}
+{% block title %}Custom screen{% endblock %}
+
+{%- set universe = universe | default([], true) -%}
+{%- set quarters_sel = quarters_sel | default([], true) -%}
+
+{% macro heat(s) -%}
+{%- if s is none -%}s0{%- elif s>=80 -%}s4{%- elif s>=60 -%}s3{%- elif s>=40 -%}s2{%- elif s>=20 -%}s1{%- else -%}s0{%- endif -%}
+{%- endmacro %}
+
+{% macro sigcell(sig) -%}
+{% if sig and sig.score is not none %}
+<div class="desk-sig" title="{{ sig.rationale }}">
+  <span class="v {{ heat(sig.score) }}">{{ sig.score|int }}</span>
+  <span class="bar"><i class="{{ heat(sig.score) }}-bg" style="width:{{ sig.score|int }}%"></i></span>
+</div>
+{% else %}
+<div class="desk-sig" title="No data for this signal">
+  <span class="v none">—</span>
+  <span class="bar none"></span>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% block content %}
+
+<header class="desk-head">
+  <div class="desk-head-left">
+    <h1>Custom screen</h1>
+    <div class="desk-facts">
+      <div class="desk-fact">
+        <span class="desk-fact-k">BANKS SCREENED</span>
+        <span class="desk-fact-v">{{ universe|length }}</span>
+      </div>
+      <div class="desk-rule"></div>
+      <div class="desk-fact">
+        <span class="desk-fact-k">QUARTER</span>
+        <span class="desk-fact-v">{{ as_of }}</span>
+      </div>
+      <div class="desk-rule"></div>
+      <div class="desk-fact">
+        <span class="desk-fact-k">Q/Q BASIS</span>
+        <span class="desk-fact-v soft">{{ 'vs ' ~ prior if prior else '—' }}</span>
+      </div>
+      <div class="desk-rule"></div>
+      <div class="desk-fact">
+        <span class="desk-fact-k">ABOVE THRESHOLD</span>
+        <span class="desk-fact-v hot">{{ above_count }} of {{ universe|length }}</span>
+      </div>
+    </div>
+  </div>
+  <div class="desk-actions">
+    <div class="desk-toggle">
+      <button type="button" data-theme-btn="dark">Dark</button>
+      <button type="button" data-theme-btn="light">Light</button>
+    </div>
+    <a class="desk-btn primary" href="{{ url_for('home') }}?custom=1" data-loading="ledger">Change selection</a>
+    <a class="desk-btn" href="{{ url_for('home') }}" data-loading="ledger">← Bank Universe</a>
+  </div>
+</header>
+
+<div class="desk-status">
+  <span>scored against the full {{ as_of }} universe of {{ "{:,}".format(universe_total) if universe_total else '—' }}
+    depositories, not against each other</span>
+  {% if rep_filter and rep_filter != '__all__' %}
+  <span class="sep">|</span>
+  <span>rep filter: {{ rep_label }}</span>
+  {% endif %}
+  {% if quarters_sel|length > 1 %}
+  <span class="sep">|</span>
+  <span>{{ quarters_sel|length }} quarters selected · ranking uses the most recent</span>
+  {% endif %}
+  <span class="right">
+    <a href="{{ url_for('validate') }}" data-loading="qc">Run data QC →</a>
+  </span>
+</div>
+
+<div class="desk-ledger-wrap">
+  <div class="desk-lrow desk-lhead">
+    <div title="Position by composite score against every depository that filed for this quarter. 1 is the strongest opportunity.">RANK</div>
+    <div>BANK</div>
+    <div title="Coverage from the rep file. Unassigned banks are in the data but not yet claimed.">REP</div>
+    <div title="SIGNAL A · IDLE LIQUIDITY — Cash sitting on the balance sheet with no organic outlet: cash as a share of assets, against the loan/deposit ratio. A high score means deposits came in faster than loans could absorb them, so the money is earning well under the bank's own earning-asset yield. This is a deployment conversation.">A <span class="sub">liq</span></div>
+    <div title="SIGNAL B · UNDERWATER BOOK — How far the securities portfolio is marked below amortized cost, and how far its yield sits under current reinvestment. A high score means a large unrealized loss on a low-coupon book. The conversation is the earn-back period, not the loss itself.">B <span class="sub">book</span></div>
+    <div title="SIGNAL C · NET INCOME Q/Q — Direction and size of the quarter-over-quarter earnings move. By default a decline scores higher, on the reasoning that pressured earnings make a CFO more receptive. Reverse it in Settings. Percentile-ranked, so small banks can swing hard on small dollar changes.">C <span class="sub">n/i</span></div>
+    <div class="r" title="Change in composite percentile since the prior quarter. Positive means the bank became a stronger opportunity.">Δ Q/Q</div>
+    <div class="r" title="Weighted blend of A, B and C, expressed as a percentile against the full universe. Adjust the weights in Settings. The sparkline traces the last five quarters.">COMPOSITE</div>
+  </div>
+
+  {% for r in universe %}
+  <a class="desk-lrow desk-lbody {{ 'above' if r.composite is not none and r.composite >= threshold }}"
+    href="{{ url_for('bank', bank=r.key, as_of=as_of) }}" data-loading="bank">
+    <div class="desk-rank">
+      <b>{{ "{:,}".format(r.universe_rank) if r.universe_rank else '—' }}</b>
+      <span class="track"><i></i><b
+          style="left:{{ ((r.universe_rank / universe_total) * 62)|round(1) if (universe_total and r.universe_rank) else 0 }}px"></b></span>
+    </div>
+    <div class="desk-bankcell">
+      <span class="n">{{ r.bank }}</span>
+      <span class="m">{{ r.location }}{% if r.assets_fmt %} · {{ r.assets_fmt }}{% endif %}</span>
+    </div>
+    <div class="desk-repcell">
+      {%- set rep_name = 'Unassigned' if (r.rep and r.rep.unassigned) else (r.rep.name if r.rep else '—') -%}
+      <span title="{{ rep_name }}">{{ rep_name }}</span>
+    </div>
+    {{ sigcell(r.signal_a) }}
+    {{ sigcell(r.signal_b) }}
+    {{ sigcell(r.signal_c) }}
+    <div class="desk-delta {{ 'up' if r.delta and r.delta > 0 else 'down' if r.delta and r.delta < 0 else 'flat' }}">
+      {{ '+' ~ r.delta|int if r.delta and r.delta > 0 else r.delta|int if r.delta and r.delta < 0 else '—' }}
+    </div>
+    <div class="desk-comp">
+      {% if r.spark %}<svg class="spark" width="34" height="16" viewBox="0 0 34 16" aria-hidden="true"><polyline
+          points="{{ r.spark }}" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round">
+        </polyline></svg>{% endif %}
+      <span class="v {{ heat(r.composite) }}">{{ r.composite|int if r.composite is not none else '—' }}</span>
+    </div>
+  </a>
+  {% else %}
+  <div class="desk-foot">
+    None of the selected banks scored for {{ as_of }} — they may not have filed this quarter.
+    <a href="{{ url_for('home') }}?custom=1">Change the selection</a> or pick an earlier quarter.
+  </div>
+  {% endfor %}
+
+  {% if universe %}
+  <div class="desk-foot">
+    Percentiles are ranked against all depositories filing for {{ as_of }}, so a small cohort still reads against the
+    whole market. Gold rules mark banks at or above the {{ threshold }}th percentile. Click any row for the call-prep
+    brief.
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
